@@ -1,0 +1,120 @@
+//@version=5
+indicator("Volume Pulse Reversal", shorttitle="VPR", overlay=true)
+
+// --- Input Groups and Parameters ---
+// General Settings
+var string GRP_GENERAL = "General Settings"
+length = input.int(20, "Lookback Period", minval=5, maxval=100, group=GRP_GENERAL, tooltip="Period for VWMA and volume averaging")
+volume_threshold = input.float(1.5, "Volume Threshold Multiplier", minval=0.5, maxval=5.0, step=0.1, group=GRP_GENERAL, tooltip="Multiplier for detecting volume spikes")
+
+// RSI Settings
+var string GRP_RSI = "RSI Settings"
+rsi_length = input.int(14, "RSI Length", minval=5, maxval=50, group=GRP_RSI, tooltip="Period for RSI calculation")
+rsi_overbought = input.int(70, "RSI Overbought", minval=50, maxval=90, group=GRP_RSI, tooltip="RSI level for bearish reversals")
+rsi_oversold = input.int(30, "RSI Oversold", minval=10, maxval=50, group=GRP_RSI, tooltip="RSI level for bullish reversals")
+
+// Display Settings
+var string GRP_DISPLAY = "Display Settings"
+show_signals = input.bool(true, "Show Buy/Sell Signals", group=GRP_DISPLAY, tooltip="Display buy/sell signal labels")
+show_zones = input.bool(true, "Show Reversal Zones", group=GRP_DISPLAY, tooltip="Highlight reversal zones with background color")
+show_vwap = input.bool(true, "Show VWAP", group=GRP_DISPLAY, tooltip="Display Volume-Weighted Moving Average")
+show_ema = input.bool(true, "Show EMAs", group=GRP_DISPLAY, tooltip="Display Fast and Slow EMAs")
+table_position = input.string("top_right", "Table Position", options=["top_right", "top_left", "bottom_right", "bottom_left"], group=GRP_DISPLAY, tooltip="Position of the info table")
+
+// Color Settings
+var string GRP_COLORS = "Color Settings"
+bullish_color = input.color(color.new(color.green, 20), "Bullish Zone Color", group=GRP_COLORS)
+bearish_color = input.color(color.new(color.red, 20), "Bearish Zone Color", group=GRP_COLORS)
+vwap_color = input.color(color.blue, "VWAP Color", group=GRP_COLORS)
+ema_fast_color = input.color(color.orange, "EMA Fast Color", group=GRP_COLORS)
+ema_slow_color = input.color(color.purple, "EMA Slow Color", group=GRP_COLORS)
+
+// --- Calculations ---
+// Volume-Weighted Moving Average
+vwap_custom = ta.vwma(hlc3, length)
+
+// RSI for momentum
+rsi = ta.rsi(close, rsi_length)
+
+// Volume analysis
+avg_volume = ta.sma(volume, length)
+volume_spike = volume > avg_volume * volume_threshold
+
+// Price range analysis with volatility adjustment
+atr = ta.atr(length)
+price_range = high - low
+expanded_range = price_range > atr * 1.5
+
+// Trend detection using EMAs
+ema_fast = ta.ema(close, 9)
+ema_slow = ta.ema(close, 21)
+trend_up = ema_fast > ema_slow
+trend_down = ema_fast < ema_slow
+
+// Price momentum with division-by-zero protection
+price_momentum = (close - vwap_custom) / math.max(vwap_custom, 0.0001) * 100
+
+// --- Reversal Conditions ---
+bullish_reversal = close < vwap_custom and rsi < rsi_oversold and volume_spike and expanded_range
+bearish_reversal = close > vwap_custom and rsi > rsi_overbought and volume_spike and expanded_range
+
+// Signal generation with confirmation
+long_signal = bullish_reversal and ta.crossover(close, open)
+short_signal = bearish_reversal and ta.crossunder(close, open)
+
+// --- Plotting ---
+// VWAP
+plot(show_vwap ? vwap_custom : na, "Volume-Weighted Average", vwap_color, linewidth=2)
+
+// EMAs
+plot(show_ema ? ema_fast : na, "EMA Fast", ema_fast_color, linewidth=1)
+plot(show_ema ? ema_slow : na, "EMA Slow", ema_slow_color, linewidth=1)
+
+// Reversal zones
+bgcolor(show_zones and bullish_reversal ? bullish_color : na, title="Bullish Reversal Zone")
+bgcolor(show_zones and bearish_reversal ? bearish_color : na, title="Bearish Reversal Zone")
+
+// Signals
+plotshape(show_signals and long_signal, "Buy Signal", style=shape.labelup, location=location.belowbar, 
+          color=color.green, textcolor=color.white, text="BUY", size=size.small)
+plotshape(show_signals and short_signal, "Sell Signal", style=shape.labeldown, location=location.abovebar, 
+          color=color.red, textcolor=color.white, text="SELL", size=size.small)
+
+// Momentum histogram
+momentum_color = price_momentum > 0 ? color.new(color.green, 70) : color.new(color.red, 70)
+plot(show_signals ? price_momentum : na, "Price Momentum %", momentum_color, display=display.pane, linewidth=2)
+hline(0, "Zero Line", color=color.gray, linestyle=hline.style_dotted)
+
+// --- Alerts ---
+alertcondition(long_signal, "VPR Buy Signal", "Bullish reversal: Price={{close}}, RSI={{rsi}}")
+alertcondition(short_signal, "VPR Sell Signal", "Bearish reversal: Price={{close}}, RSI={{rsi}}")
+
+// --- Enhanced Info Table ---
+// Convert table position string to position constant
+get_table_position() =>
+    switch table_position
+        "top_right" => position.top_right
+        "top_left" => position.top_left
+        "bottom_right" => position.bottom_right
+        "bottom_left" => position.bottom_left
+        => position.top_right
+
+// Create table with var keyword
+var table info_table = table.new(position=get_table_position(), columns=2, rows=3, bgcolor=color.new(color.black, 90), border_color=color.gray, border_width=2, frame_color=color.silver, frame_width=2)
+
+// Update table only on last bar to optimize performance
+if barstate.islast
+    // Header
+    table.cell(info_table, 0, 0, "Metric", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.normal, text_halign=text.align_left)
+    table.cell(info_table, 1, 0, "Value", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.normal, text_halign=text.align_center)
+    
+    // Status
+    table.cell(info_table, 0, 1, "Status", bgcolor=color.new(color.white, 95), text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    status_text = bullish_reversal ? "Bullish" : bearish_reversal ? "Bearish" : "Neutral"
+    status_color = bullish_reversal ? color.green : bearish_reversal ? color.red : color.gray
+    table.cell(info_table, 1, 1, status_text, bgcolor=color.new(color.white, 95), text_color=status_color, text_size=size.small, text_halign=text.align_center)
+    
+    // RSI
+    table.cell(info_table, 0, 2, "RSI", bgcolor=color.new(color.white, 95), text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    rsi_color = rsi > rsi_overbought ? color.red : rsi < rsi_oversold ? color.green : color.gray
+    table.cell(info_table, 1, 2, str.tostring(math.round(rsi, 1)), bgcolor=color.new(color.white, 95), text_color=rsi_color, text_size=size.small, text_halign=text.align_center)
